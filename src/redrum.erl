@@ -43,6 +43,8 @@ remap_repo(Repo, Config, Opts) ->
 
 remap_rebar_config(Repo, Config, Opts) ->
     RebarConfig = filename:join(Repo, ?REBAR_CONF),
+    %% TODO =: this is probably not good enough, we probably need to
+    %% parse into AST and manipulate that, retaining any comments.
     {ok, Terms} = file:consult(RebarConfig),
     Deps = proplists:get_value(deps, Terms, []),
     NewDeps = remap_deps(Deps, Config),
@@ -91,8 +93,11 @@ remap_uri({Scheme, UserInfo, Host, Port, Path, Query}, DepMap) ->
     NewQuery = remap_query(Query, DepMap),
     uri_to_string({NewScheme, NewUserInfo, NewHost, NewPort, NewPath, NewQuery}).
 
-rewrite_config(NewDeps, Repo, Terms, Opts) ->
-    {NewDeps, Repo, Terms, Opts}.
+rewrite_config(NewDeps, Repo, Terms, _Opts) ->
+    NewTerms = lists:keystore(deps, 1, Terms, {deps,  NewDeps}),
+    Format = fun(Term) -> io_lib:format("~tp.~n", [Term]) end,
+    Text = lists:map(Format, NewTerms),
+    replace_deps(filename:join([Repo, ?REBAR_CONF]), Text).
 
 remap_scheme(Scheme, DepMap) ->
     remap_simple(scheme, Scheme, DepMap).
@@ -147,3 +152,39 @@ test_conf() ->
        {port, {443, 890}}]
       }].
 
+%% @doc Atomically/safely (to some reasonable level of durablity)
+%% replace file `FN' with `Data'.
+-spec replace_file(string(), iodata()) -> ok | {error, term()}.
+replace_file(FN, Data) ->
+    TmpFN = FN ++ ".tmp",
+    case file:open(TmpFN, [write, raw]) of
+        {ok, FH} ->
+            try
+                ok = file:write(FH, Data),
+                ok = file:sync(FH),
+                ok = file:close(FH),
+                ok = file:rename(TmpFN, FN),
+                {ok, Contents} = read_file(FN),
+                true = (Contents == iolist_to_binary(Data)),
+                ok
+            catch _:Err ->
+                    {error, Err}
+            end;
+        Err ->
+            Err
+    end.
+
+%% @doc Similar to {@link file:read_file/1} but uses raw file `I/O'
+read_file(FName) ->
+    {ok, FD} = file:open(FName, [read, raw, binary]),
+    IOList = read_file(FD, []),
+    ok = file:close(FD),
+    {ok, iolist_to_binary(IOList)}.
+
+read_file(FD, Acc) ->
+    case file:read(FD, 4096) of
+        {ok, Data} ->
+            read_file(FD, [Data|Acc]);
+        eof ->
+            lists:reverse(Acc)
+    end.
