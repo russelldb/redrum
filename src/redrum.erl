@@ -5,7 +5,7 @@
 -compile(export_all).
 
 -define(REBAR_CONF, "rebar.config").
--define(SCHEME_DEFAULTS, [{git, 9418}, {https, 443}]).
+-define(SCHEME_DEFAULTS, [{git, 9418}, {https, 443}, {ssh, 22}]).
 
 %%====================================================================
 %% API functions
@@ -44,7 +44,7 @@ remap_repo(Repo, Config, Opts) ->
 remap_rebar_config(Repo, Config, Opts) ->
     RebarConfig = filename:join(Repo, ?REBAR_CONF),
     %% TODO =: this is probably not good enough, we probably need to
-    %% parse into AST and manipulate that, retaining any comments.
+    %% parse into AST and manipulate that, retaining any comments
     {ok, Terms} = file:consult(RebarConfig),
     Deps = proplists:get_value(deps, Terms, []),
     NewDeps = remap_deps(Deps, Config),
@@ -63,10 +63,8 @@ remap_deps(Deps, Config) ->
 remap_dep(Dep, Config) ->
     Source = element(3, Dep),
     URL = element(2, Source),
-    SchemeDefaults = proplists:get_value(scheme_defaults, Config, ?SCHEME_DEFAULTS),
-    {ok, URI} = http_uri:parse(URL, [{scheme_defaults, SchemeDefaults}]),
-    DepMap = get_dep_mapping(element(1, Dep), Config),
-    NewURI = remap_uri(URI, DepMap),
+    {ok, URI} = parse_url(URL, Config),
+    NewURI = remap_uri(Dep, URI, Config),
     NewSource = setelement(2, Source, NewURI),
     setelement(3, Dep, NewSource).
 
@@ -83,7 +81,8 @@ get_dep_mapping(Dep, Config) ->
                           L, Defaults)
     end.
 
-remap_uri({Scheme, UserInfo, Host, Port, Path, Query}, DepMap) ->
+remap_uri(Dep, {Scheme, UserInfo, Host, Port, Path, Query}, Config) ->
+    DepMap = get_dep_mapping(element(1, Dep), Config),
     %% there will always be a value, if just itself
     NewScheme = remap_scheme(Scheme, DepMap),
     NewUserInfo = remap_userinfo(UserInfo, DepMap),
@@ -91,13 +90,13 @@ remap_uri({Scheme, UserInfo, Host, Port, Path, Query}, DepMap) ->
     NewPort = remap_port(Port, DepMap),
     NewPath = remap_path(Path, DepMap),
     NewQuery = remap_query(Query, DepMap),
-    uri_to_string({NewScheme, NewUserInfo, NewHost, NewPort, NewPath, NewQuery}).
+    uri_to_string({NewScheme, NewUserInfo, NewHost, NewPort, NewPath, NewQuery}, Config).
 
 rewrite_config(NewDeps, Repo, Terms, _Opts) ->
     NewTerms = lists:keystore(deps, 1, Terms, {deps,  NewDeps}),
     Format = fun(Term) -> io_lib:format("~tp.~n", [Term]) end,
     Text = lists:map(Format, NewTerms),
-    replace_deps(filename:join([Repo, ?REBAR_CONF]), Text).
+    replace_file(filename:join([Repo, ?REBAR_CONF]), Text).
 
 remap_scheme(Scheme, DepMap) ->
     remap_simple(scheme, Scheme, DepMap).
@@ -112,45 +111,35 @@ remap_port(Port, DepMap) ->
     remap_simple(port, Port, DepMap).
 
 remap_path(Path, DepMap) ->
-    case proplists:get_value(path, DepMap) of
-        L when is_list(L) ->
-            PathTokens = string:tokens(Path, "/"),
-            {RepoPath, Repo} = lists:split(length(PathTokens)-1 , PathTokens),
-            NewPathTokens = lists:foldr(fun(PathToken, Acc) ->
-                                                case proplists:get_value(PathToken, L) of
-                                                    undefined -> PathToken;
-                                                    PT2 -> [PT2 | Acc]
-                                                end
-                                        end,
-                                        [],
-                                        RepoPath),
-            io:format("new path tokens ~p repo ~p~n", [NewPathTokens, Repo]),
-            filename:join(["/", NewPathTokens, Repo]);
-        undefined ->
-            Path
-    end.
+    {RepoPath, Repo} = {filename:dirname(Path), filename:basename(Path)},
+    NewRepoPath = remap_simple(path, RepoPath, DepMap),
+    filename:join(["/", NewRepoPath, Repo]).
 
 remap_query(Query, DepMap) ->
     remap_simple(query_str, Query, DepMap).
 
 remap_simple(URIPartName, FromVal, DepMap) ->
     case proplists:get_value(URIPartName, DepMap) of
-        {FromVal, ToVal} ->
+        {'*', ToVal} ->
             ToVal;
+        {FromVal, ToVal} -> ToVal;
+        L when is_list(L) ->
+            case proplists:get_value(FromVal, L) of
+                undefined -> FromVal;
+                ToVal -> ToVal
+            end;
         _ ->
             FromVal
     end.
 
-uri_to_string(URI) ->
-    uri:to_string(URI).
+uri_to_string(URI, Config) ->
+    SchemeDefaults = get_scheme_defaults(Config),
+    uri_to_string(URI, SchemeDefaults, proplists:get_value(scp_style, Config, true)).
 
-test_conf() ->
-    [{default,
-      [{scheme, {git, https}},
-       {host, {"github.com", "gitlab.uk"}},
-       {path, [{"basho", "bet365"}]},
-       {port, {443, 890}}]
-      }].
+uri_to_string(URI, SchemeDefaults, true) when is_tuple(URI) andalso element(1, URI) == ssh ->
+    ssh_url_to_scp(URI, SchemeDefaults);
+uri_to_string(URI, SchemeDefaults, _SSHToSCP) ->
+    uri:to_string(URI, SchemeDefaults).
 
 %% @doc Atomically/safely (to some reasonable level of durablity)
 %% replace file `FN' with `Data'.
@@ -188,3 +177,48 @@ read_file(FD, Acc) ->
         eof ->
             lists:reverse(Acc)
     end.
+
+parse_url(URL, Config) ->
+    SchemeDefaults = get_scheme_defaults(Config),
+    case http_uri:parse(URL, SchemeDefaults) of
+        {ok, URI} ->
+            {ok, URI};
+        {error, {malformed_url, _, _}} ->
+            maybe_parse_scp_style_url(URL, Config)
+    end.
+
+get_scheme_defaults(Config) ->
+    SchemeDefaults = proplists:get_value(scheme_defaults, Config, ?SCHEME_DEFAULTS),
+    [{scheme_defaults, SchemeDefaults}].
+
+%% honestly a hack, I don't know if it is good enough
+maybe_parse_scp_style_url(URL, Config) ->
+    Tokens = string:tokens(URL, "@:"),
+    case Tokens of
+        [User, HostPath] ->
+            NewURL = lists:flatten(["ssh://", User, "@", HostPath]),
+            parse_url(NewURL, Config);
+        [User, Host, Path] ->
+            NewURL = lists:flatten(["ssh://", User, "@", Host, "/", Path]),
+            parse_url(NewURL, Config)
+    end.
+
+%% as above, a quick and dirty hack
+ssh_url_to_scp({ssh, UserInfo, Host, Port, Path, Query}=URI, SchemeDefaults0) ->
+    [{_, SchemeDefaults}] = SchemeDefaults0,
+    case proplists:get_value(ssh, SchemeDefaults) of
+        Port ->  lists:flatten([UserInfo, "@", Host, ":", Path, Query]);
+        _Int ->
+            %% don't know how to add port info to scp style url, so stick to SSH style
+            uri_to_string(URI, SchemeDefaults0, false)
+    end.
+
+%%% just for console testing/faffing
+test_conf() ->
+    [{default,
+      [{scheme, {git, https}},
+       {host, {"github.com", "gitlab.uk"}},
+       {path, [{"basho", "bet365"}]},
+       {port, {443, 890}}]
+      }].
+
