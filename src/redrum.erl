@@ -65,7 +65,9 @@ remap_dep(Dep, Config) ->
     URL = element(2, Source),
     {ok, URI} = parse_url(URL, Config),
     NewURI = remap_uri(Dep, URI, Config),
-    NewSource = setelement(2, Source, NewURI),
+    Rev = element(3, Source),
+    NewRev = remap_rev(Dep, Rev, Config),
+    NewSource = setelement(3, setelement(2, Source, NewURI), NewRev),
     setelement(3, Dep, NewSource).
 
 get_dep_mapping(Dep, Config) ->
@@ -137,6 +139,7 @@ uri_to_string(URI, Config) ->
     uri_to_string(URI, SchemeDefaults, proplists:get_value(scp_style, Config, true)).
 
 uri_to_string(URI, SchemeDefaults, true) when is_tuple(URI) andalso element(1, URI) == ssh ->
+    io:format("is ssh uri ~p~n", [URI]),
     ssh_url_to_scp(URI, SchemeDefaults);
 uri_to_string(URI, SchemeDefaults, _SSHToSCP) ->
     uri:to_string(URI, SchemeDefaults).
@@ -222,3 +225,6 @@ test_conf() ->
        {port, {443, 890}}]
       }].
 
+%%-TODO:: this needs doing next
+remap_rev(_Dep, Rev, _Conf) ->
+    Rev.
