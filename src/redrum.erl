@@ -1,7 +1,6 @@
 -module(redrum).
 
 %% API exports
--export([main/1]).
 -compile(export_all).
 
 -define(REBAR_CONF, "rebar.config").
@@ -10,19 +9,6 @@
 %%====================================================================
 %% API functions
 %%====================================================================
-
-%% escript Entry point
-main(Args) ->
-    io:format("Args: ~p~n", [Args]),
-    {Config, Directory, Opts} = parse_args(Args),
-    remap(Config, Directory, Opts),
-    erlang:halt(0).
-
-%%====================================================================
-%% Internal functions
-%%====================================================================
-parse_args(_Args) ->
-    {ok, ok, ok}.
 
 remap(Config, Directory, Opts) ->
     {ok, Files} = file:list_dir(Directory),
@@ -33,7 +19,8 @@ remap_repo(Repo, Config, Opts) ->
     io:format("~p remapping ~p~n", [self(), Repo]),
     case is_repo(Repo) of
         true ->
-            Res = remap_rebar_config(Repo, Config, Opts),
+            RebarConfig = filename:join(Repo, ?REBAR_CONF),
+            Res = remap_rebar_config(RebarConfig, Config, Opts),
             io:format("~p remapped ~p ::: ~p~n", [self(), Repo, Res]);
         false ->
             %% not a repo, report?
@@ -41,14 +28,13 @@ remap_repo(Repo, Config, Opts) ->
             {Repo, not_a_repo}
     end.
 
-remap_rebar_config(Repo, Config, Opts) ->
-    RebarConfig = filename:join(Repo, ?REBAR_CONF),
-    %% TODO =: this is probably not good enough, we probably need to
-    %% parse into AST and manipulate that, retaining any comments
-    {ok, Terms} = file:consult(RebarConfig),
+remap_rebar_config(RebarConfigFile, Config, Opts) ->
+    {ok, Terms} = file:consult(RebarConfigFile),
     Deps = proplists:get_value(deps, Terms, []),
     NewDeps = remap_deps(Deps, Config),
-    rewrite_config(NewDeps, Repo, Terms, Opts).
+    %% TODO =: this is probably not good enough, we probably need to
+    %% parse into AST and manipulate that, retaining any comments
+    rewrite_config(NewDeps, RebarConfigFile, Terms, Opts).
 
 is_repo(Repo) ->
     filelib:is_dir(Repo) andalso
@@ -61,27 +47,33 @@ remap_deps(Deps, Config) ->
               Deps).
 
 remap_dep(Dep, Config) ->
+    io:format("remapping dep ~p~n", [Dep]),
     Source = element(3, Dep),
     URL = element(2, Source),
     {ok, URI} = parse_url(URL, Config),
     NewURI = remap_uri(Dep, URI, Config),
-    Rev = element(3, Source),
-    NewRev = remap_rev(Dep, Rev, Config),
-    NewSource = setelement(3, setelement(2, Source, NewURI), NewRev),
+    io:format("new uri ~p~n", [NewURI]),
+    NewSource = setelement(2, Source, NewURI),
     setelement(3, Dep, NewSource).
 
 get_dep_mapping(Dep, Config) ->
     DepsMap = proplists:get_value(deps, Config, []),
-    Defaults = proplists:get_value(default, Config, []),
-    case proplists:get_value(Dep, DepsMap) of
-        undefined ->
-            Defaults;
-        L ->
-            orddict:merge(fun(_Key, DepMapping, _DefaultMapping) ->
-                                  DepMapping
-                          end,
-                          L, Defaults)
-    end.
+    io:format("got ~p from ~p~n", [DepsMap, Config]),
+    Defaults = proplists:get_value(default_mapping, Config, []),
+    M = case proplists:get_value(Dep, DepsMap) of
+            undefined ->
+                Defaults;
+            L ->
+                orddict:merge(fun(_Key, DepMapping, _DefaultMapping) ->
+                                      DepMapping
+                              end,
+                              L, Defaults)
+        end,
+    io:format("using mapping ~p~n", [M]),
+    M.
+
+
+
 
 remap_uri(Dep, {Scheme, UserInfo, Host, Port, Path, Query}, Config) ->
     DepMap = get_dep_mapping(element(1, Dep), Config),
@@ -94,11 +86,11 @@ remap_uri(Dep, {Scheme, UserInfo, Host, Port, Path, Query}, Config) ->
     NewQuery = remap_query(Query, DepMap),
     uri_to_string({NewScheme, NewUserInfo, NewHost, NewPort, NewPath, NewQuery}, Config).
 
-rewrite_config(NewDeps, Repo, Terms, _Opts) ->
+rewrite_config(NewDeps, RebarConfigFile, Terms, _Opts) ->
     NewTerms = lists:keystore(deps, 1, Terms, {deps,  NewDeps}),
     Format = fun(Term) -> io_lib:format("~tp.~n", [Term]) end,
     Text = lists:map(Format, NewTerms),
-    replace_file(filename:join([Repo, ?REBAR_CONF]), Text).
+    replace_file(RebarConfigFile, Text).
 
 remap_scheme(Scheme, DepMap) ->
     remap_simple(scheme, Scheme, DepMap).
@@ -139,7 +131,6 @@ uri_to_string(URI, Config) ->
     uri_to_string(URI, SchemeDefaults, proplists:get_value(scp_style, Config, true)).
 
 uri_to_string(URI, SchemeDefaults, true) when is_tuple(URI) andalso element(1, URI) == ssh ->
-    io:format("is ssh uri ~p~n", [URI]),
     ssh_url_to_scp(URI, SchemeDefaults);
 uri_to_string(URI, SchemeDefaults, _SSHToSCP) ->
     uri:to_string(URI, SchemeDefaults).
@@ -224,7 +215,3 @@ test_conf() ->
        {path, [{"basho", "bet365"}]},
        {port, {443, 890}}]
       }].
-
-%%-TODO:: this needs doing next
-remap_rev(_Dep, Rev, _Conf) ->
-    Rev.
