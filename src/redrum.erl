@@ -3,6 +3,10 @@
 %% API exports
 -compile(export_all).
 
+-ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
+-endif.
+
 -define(REBAR_CONF, "rebar.config").
 -define(SCHEME_DEFAULTS, [{git, 9418}, {https, 443}, {ssh, 22}]).
 
@@ -24,7 +28,7 @@ remap_repo(Repo, Config, Opts) ->
             io:format("~p remapped ~p ::: ~p~n", [self(), Repo, Res]);
         false ->
             %% not a repo, report?
-            io:format("~p  ~p IS NOT A REPO~n", [self(), Repo]),
+            io:format("~p  ~p has no rebar.config~n", [self(), Repo]),
             {Repo, not_a_repo}
     end.
 
@@ -48,13 +52,21 @@ remap_deps(Deps, Config) ->
 
 remap_dep(Dep, Config) ->
     io:format("remapping dep ~p~n", [Dep]),
-    Source = element(3, Dep),
-    URL = element(2, Source),
+    {Name, _Vsn, Source} = Dep,
+    {Engine, URL, Rev} = Source,
+    DepMapping = get_dep_mapping(Name, Config),
     {ok, URI} = parse_url(URL, Config),
-    NewURI = remap_uri(Dep, URI, Config),
+    NewURI = remap_uri(URI, DepMapping, Config),
+    NewEngine = remap_engine(Engine, DepMapping),
+    NewRev = remap_rev(Rev, DepMapping),
     io:format("new uri ~p~n", [NewURI]),
-    NewSource = setelement(2, Source, NewURI),
-    setelement(3, Dep, NewSource).
+    setelement(3, Dep, {NewEngine, NewURI, NewRev}).
+
+remap_rev(Rev, Mapping) ->
+    remap_simple(rev, Rev, Mapping).
+
+remap_engine(Engine, Mapping) ->
+    remap_simple(engine, Engine, Mapping).
 
 get_dep_mapping(Dep, Config) ->
     DepsMap = proplists:get_value(deps, Config, []),
@@ -72,11 +84,7 @@ get_dep_mapping(Dep, Config) ->
     io:format("using mapping ~p~n", [M]),
     M.
 
-
-
-
-remap_uri(Dep, {Scheme, UserInfo, Host, Port, Path, Query}, Config) ->
-    DepMap = get_dep_mapping(element(1, Dep), Config),
+remap_uri({Scheme, UserInfo, Host, Port, Path, Query}, DepMap, Config) ->
     %% there will always be a value, if just itself
     NewScheme = remap_scheme(Scheme, DepMap),
     NewUserInfo = remap_userinfo(UserInfo, DepMap),
@@ -215,3 +223,7 @@ test_conf() ->
        {path, [{"basho", "bet365"}]},
        {port, {443, 890}}]
       }].
+
+
+-ifdef(TEST).
+-endif.

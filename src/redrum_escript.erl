@@ -27,7 +27,7 @@ main(Args) ->
     Conf = read_conf(proplists:get_value(config, ParsedArgs, undefined), ParsedArgs),
 
     ok = maybe_remap_file(ParsedArgs, Conf),
-    ok = maybe_remap_deps(ParsedArgs, Conf),
+    maybe_remap_deps(ParsedArgs, Conf),
 
     erlang:halt(0).
 
@@ -38,8 +38,7 @@ cli_opts() ->
     [
      {file,         $f,        "file",      {string, "rebar.config"}, "File to remap"},
      {skip,         $s,        "skip",      undefined, "skip top level rebar config file"},
-     {deps,         $d,        "deps",      undefined, "remap default rebar deps directory 'deps'"},
-     {deps_dir,     $i,        "deps_dir",  string,  "Deps directory to remap [if not usual 'deps' directory]"},
+     {deps,         $d,        "deps",      string, "remap rebar deps directory"},
      {config,       $c,        "config",    {string, "redrum.conf"},   "config file containing remappings"},
      {help,         $h,        "help",     undefined,                 "help / usage"}
     ].
@@ -75,5 +74,11 @@ maybe_remap_file(false, File, Conf) ->
     redrum:remap_rebar_config(File, Conf, []).
 
 %% @TODO(implement)
-maybe_remap_deps(_Args, _Conf) ->
-    ok.
+maybe_remap_deps(Args, Conf) ->
+    case proplists:get_value(deps, Args, undefined) of
+        undefined ->
+            ok;
+        Dir ->
+            redrum:remap(Conf, Dir, [])
+    end.
+
