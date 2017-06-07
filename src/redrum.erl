@@ -52,9 +52,9 @@ remap_deps(Deps, Config) ->
 
 remap_dep(Dep, Config) ->
     io:format("remapping dep ~p~n", [Dep]),
-    {Name, _Vsn, Source} = Dep,
+    {_Name, _Vsn, Source} = Dep,
     {Engine, URL, Rev} = Source,
-    DepMapping = get_dep_mapping(Name, Config),
+    DepMapping = get_dep_mapping(Dep, Config),
     {ok, URI} = parse_url(URL, Config),
     NewURI = remap_uri(URI, DepMapping, Config),
     NewEngine = remap_engine(Engine, DepMapping),
@@ -69,20 +69,58 @@ remap_engine(Engine, Mapping) ->
     remap_simple(engine, Engine, Mapping).
 
 get_dep_mapping(Dep, Config) ->
-    DepsMap = proplists:get_value(deps, Config, []),
-    io:format("got ~p from ~p~n", [DepsMap, Config]),
-    Defaults = proplists:get_value(default_mapping, Config, []),
-    M = case proplists:get_value(Dep, DepsMap) of
-            undefined ->
-                Defaults;
-            L ->
-                orddict:merge(fun(_Key, DepMapping, _DefaultMapping) ->
-                                      DepMapping
-                              end,
-                              L, Defaults)
-        end,
-    io:format("using mapping ~p~n", [M]),
-    M.
+    try
+        lists:foldl(fun(MappingFun, undefined) ->
+                            io:format("trying ~p~n", [MappingFun]),
+                            erlang:apply(?MODULE, MappingFun, [Dep, Config]);
+                       (_MappingFun, Mapping) ->
+                            throw({found, Mapping})
+                    end, undefined, [name_mapping, engine_mapping, host_mapping, path_mapping, default_mapping, no_mapping])
+    catch {found, Mapping} ->
+            Mapping
+    end.
+
+
+%% @doc pulls a specific mapping config for this dep based on it's
+%% name in rebar.config
+name_mapping({Name, _Vsn, _Source}=_Dep, Config) ->
+    DepsMap = proplists:get_value(deps, Config),
+    proplists:get_value(Name, DepsMap).
+
+%% @doc engine mapping: any dep who's engine has an entry in the
+%% engine_map
+engine_mapping({_Name, _Vsn, {Engine, _URL, _Rev}=_Source}, Config) ->
+    EngineMap = proplists:get_value(engines, Config, []),
+    proplists:get_value(Engine, EngineMap).
+
+%% @doc host mapping, remap any dep that is at a matched host
+host_mapping({_Name, _Vsn, {_Engine, URL, _Rev}=_Source}, Config) ->
+    HostMap = proplists:get_value(hosts, Config, []),
+    {ok, URI} = parse_url(URL, Config),
+    Host = get_host(URI),
+    proplists:get_value(Host, HostMap).
+
+%% @doc path mapping: at the moment v.simple, assumes githubesque
+%% urls, and path is the bit between host and query, so user is the
+%% bit between host and /
+path_mapping({_Nam, _Vsn, {_Engine, URL, _Rev}=_Source}, Config) ->
+    PathMap = proplists:get_value(paths, Config, []),
+    {ok, URI} = parse_url(URL, Config),
+    Path = get_path(URI),
+    PathTokens = string:tokens(Path, "/"),
+    proplists:get_value(hd(PathTokens), PathMap).
+
+default_mapping(_Dep, Config) ->
+    proplists:get_value(default_mapping, Config).
+
+no_mapping(_Dep, _Config) ->
+    [].
+
+get_host({_Scheme, _UserInfo, Host, _Port, _Path, _Query}) ->
+    Host.
+
+get_path({_Scheme, _UserInfo, _Host, _Port, Path, _Query}) ->
+    Path.
 
 remap_uri({Scheme, UserInfo, Host, Port, Path, Query}, DepMap, Config) ->
     %% there will always be a value, if just itself

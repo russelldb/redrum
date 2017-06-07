@@ -4,7 +4,7 @@
 -export([main/1]).
 -compile(export_all).
 
--define(REBAR_CONF, "rebar.config").
+-define(REBAR_CONF, "rebar.config.lock").
 -define(SCHEME_DEFAULTS, [{git, 9418}, {https, 443}, {ssh, 22}]).
 
 %%====================================================================
