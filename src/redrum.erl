@@ -75,7 +75,7 @@ get_dep_mapping(Dep, Config) ->
                             erlang:apply(?MODULE, MappingFun, [Dep, Config]);
                        (_MappingFun, Mapping) ->
                             throw({found, Mapping})
-                    end, undefined, [name_mapping, engine_mapping, host_mapping, path_mapping, default_mapping, no_mapping])
+                    end, undefined, [name_mapping, engine_mapping,  path_mapping, host_mapping, default_mapping, no_mapping])
     catch {found, Mapping} ->
             Mapping
     end.
