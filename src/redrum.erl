@@ -62,6 +62,21 @@ remap_dep(Dep, Config) ->
     io:format("new uri ~p~n", [NewURI]),
     setelement(3, Dep, {NewEngine, NewURI, NewRev}).
 
+remap_sha(RebarConfigFile, DepName, NewSha) ->
+    {ok, Terms} = file:consult(RebarConfigFile),
+    Deps = proplists:get_value(deps, Terms, []),
+    Dep = lists:keyfind(DepName, 1, Deps),
+    NewDeps = case Dep of
+                  false -> Deps;
+                  {DepName, Vsn, {Engine, URL, _Rev}} ->
+                      NewDep = {DepName, Vsn, {Engine, URL, NewSha}},
+                      io:format("replace ~p with ~p~n", [Dep, NewDep]),
+                      lists:keyreplace(DepName, 1, Deps, NewDep)
+              end,
+    %% TODO =: this is probably not good enough, we probably need to
+    %% parse into AST and manipulate that, retaining any comments
+    rewrite_config(NewDeps, RebarConfigFile, Terms, []).
+
 remap_rev(Rev, Mapping) ->
     remap_simple(rev, Rev, Mapping).
 

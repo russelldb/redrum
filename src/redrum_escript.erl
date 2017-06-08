@@ -24,22 +24,45 @@ main(Args) ->
         _ -> ok
     end,
 
-    Conf = read_conf(proplists:get_value(config, ParsedArgs, undefined), ParsedArgs),
-
-    ok = maybe_remap_file(ParsedArgs, Conf),
-    maybe_remap_deps(ParsedArgs, Conf),
-
-    erlang:halt(0).
+    case maybe_update_single_dep(ParsedArgs) of
+        true ->
+            erlang:halt(0);
+        false ->
+            Conf = read_conf(proplists:get_value(config, ParsedArgs, undefined), ParsedArgs),
+            ok = maybe_remap_file(ParsedArgs, Conf),
+            maybe_remap_deps(ParsedArgs, Conf),
+            erlang:halt(0)
+    end.
 
 %%====================================================================
 %% Internal functions
 %%====================================================================
+
+maybe_update_single_dep(ParsedArgs) ->
+    case proplists:get_value(file, ParsedArgs) of
+        undefined -> run_usage(ParsedArgs), erlang:halt(0);
+        File ->
+            case proplists:get_value(update, ParsedArgs) of
+                undefined ->
+                    false;
+                Dep ->
+                    case proplists:get_value(sha, ParsedArgs) of
+                        undefined ->
+                            false;
+                        Sha ->
+                            redrum:remap_sha(File, Dep, Sha),
+                            true
+                    end
+            end
+    end.
+
 cli_opts() ->
     [
-     {file,         $f,        "file",      {string, "rebar.config"}, "File to remap"},
-     {skip,         $s,        "skip",      undefined, "skip top level rebar config file"},
+     {file,         $f,        "file",      string, "File to remap"},
      {deps,         $d,        "deps",      string, "remap rebar deps directory"},
-     {config,       $c,        "config",    {string, "redrum.conf"},   "config file containing remappings"},
+     {config,       $c,        "config",    string,   "config file containing remappings"},
+     {update,       $u,        "update",    atom,   "a dep to update"},
+     {sha,          $s,        "sha",       string,   "a new sha for a dep, use with -u"},
      {help,         $h,        "help",     undefined,                 "help / usage"}
     ].
 
